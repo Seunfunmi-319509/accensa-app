@@ -2,8 +2,9 @@
   "name": "@accensa/sdk",
   "version": "0.1.0",
   "description": "Middleware hook and receipt verification for Accensa, the merchant back-office for x402 sellers on Stellar",
-  "main": "index.ts",
-  "types": "index.ts",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
   "license": "MIT",
   "homepage": "https://accensa.github.io/accensa-app/",
   "repository": {
@@ -15,10 +16,27 @@
     "url": "https://github.com/accensa/accensa-app/issues"
   },
   "exports": {
-    ".": "./index.ts",
-    "./merkle": "./merkle.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./merkle": {
+      "types": "./dist/merkle.d.ts",
+      "import": "./dist/merkle.mjs",
+      "require": "./dist/merkle.js"
+    }
   },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
   "scripts": {
+    "build": "tsup",
+    "prepack": "pnpm build",
+    "lint": "echo 'No lint configured for @accensa/sdk'",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -36,6 +54,7 @@
     "@types/express": "^5.0.6",
     "@types/supertest": "^7.2.1",
     "supertest": "^7.2.2",
+    "tsup": "^8.0.0",
     "typescript": "~5.9.3",
     "vitest": "^2.1.9"
   }
