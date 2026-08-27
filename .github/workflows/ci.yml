@@ -89,6 +89,9 @@ jobs:
         run: npm install -g pnpm@9
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build SDK (web resolves @accensa/sdk from dist)
+        working-directory: ./packages/sdk
+        run: pnpm build
       - name: Test web
         working-directory: ./apps/web
         env:
@@ -112,6 +115,9 @@ jobs:
       # apps/docs (Docusaurus) uses its own tsconfig via @docusaurus/tsconfig
       # and is excluded — its types are checked by docusaurus build instead.
       # apps/demo-merchant is plain JavaScript and has no TypeScript to check.
+      - name: Build SDK (web typecheck resolves @accensa/sdk from dist)
+        working-directory: ./packages/sdk
+        run: pnpm build
       - name: Typecheck workspace packages
         run: pnpm typecheck
 
@@ -128,6 +134,9 @@ jobs:
         run: npm install -g pnpm@9
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build SDK (web build resolves @accensa/sdk from dist)
+        working-directory: ./packages/sdk
+        run: pnpm build
       - name: Build Next.js app
         working-directory: ./apps/web
         run: pnpm build
