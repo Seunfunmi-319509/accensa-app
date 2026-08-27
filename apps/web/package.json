@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e": "playwright test --config playwright.e2e.config.ts",
+    "e2e:headed": "playwright test --config playwright.e2e.config.ts --headed",
+    "e2e:trace": "playwright test --config playwright.e2e.config.ts --trace on"
   },
   "dependencies": {
     "@accensa/sdk": "workspace:^",
@@ -25,6 +28,8 @@
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4.3.2",
     "@types/node": "^20.19.43",
     "@types/pg": "^8.20.0",
