@@ -26,6 +26,11 @@
       "import": "./dist/merkle.mjs",
       "require": "./dist/merkle.js"
     }
+    ".": "./index.ts",
+    "./merkle": "./merkle.ts",
+    "./types": "./src/types/index.ts"
+    "./webhooks": "./webhooks.ts",
+    "./retry": "./retry.ts"
   },
   "files": [
     "dist",
@@ -39,6 +44,7 @@
     "lint": "echo 'No lint configured for @accensa/sdk'",
     "test": "vitest run",
     "test:watch": "vitest",
+    "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "gen:vectors": "node scripts/generate-vectors.mjs"
   },

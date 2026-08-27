@@ -1,14 +1,18 @@
 import { NextResponse } from 'next/server';
-import { decodeTransferEvent, transferTopicFilter, addressTopicFilter } from '@/lib/stellar-events';
+import { transferTopicFilter, addressTopicFilter } from '@/lib/stellar-events';
 import {
   withClient,
+  withMerchantClient,
   ensureSchema,
   getLastSyncedLedger,
-  setLastSyncedLedger,
   getSyncState,
 } from '@/lib/db';
+import { eventsToPaymentRows, insertPaymentsInTransaction } from '@/lib/insert-payments';
+import { listMerchants, getMerchantFromRequest, type Merchant } from '@/lib/merchants';
 import { sweepLedgerRange, EVENTS_PAGE_LIMIT, type EventPage } from '@/lib/event-pager';
 import { cooldownRemaining } from '@/lib/sync-status';
+import { isAuthorizedCronRequest } from '@/lib/cron-auth';
+import { createHmac } from 'node:crypto';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -20,7 +24,7 @@ const RPC_URL = process.env.STELLAR_RPC_URL ?? 'https://soroban-testnet.stellar.
  * to the testnet native XLM SAC; set ASSET_CONTRACT_IDS to a comma-separated
  * list to settle in USDC or across multiple assets.
  */
-const ASSET_CONTRACT_IDS = (
+const DEFAULT_ASSET_CONTRACT_IDS = (
   process.env.ASSET_CONTRACT_IDS ?? 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC'
 )
   .split(',')
@@ -94,18 +98,19 @@ interface CooldownResult {
 }
 
 /**
- * Indexes Stellar Asset Contract transfers into the merchant's payment ledger.
+ * Indexes Stellar Asset Contract transfers into one merchant's payment ledger.
  *
- * Shared by both entry points: the scheduled GET, and the POST behind the
- * dashboard's manual trigger. `cooldownMs`, when set, makes the run a no-op if
- * the last sync is more recent than that.
+ * Shared by both entry points: the scheduled GET (looped over every merchant),
+ * and the POST behind the dashboard's manual trigger (one merchant, the caller).
+ * `cooldownMs`, when set, makes the run a no-op if the last sync is more recent
+ * than that.
  */
-async function runSync(merchant: string, opts: { cooldownMs?: number } = {}) {
-  return withClient(async (client) => {
+async function runSync(merchant: Merchant, opts: { cooldownMs?: number } = {}) {
+  return withMerchantClient(merchant.id, async (client) => {
     await ensureSchema(client);
 
     if (opts.cooldownMs) {
-      const state = await getSyncState(client);
+      const state = await getSyncState(client, merchant.id);
       const retryAfterMs = cooldownRemaining(state?.updatedAt, opts.cooldownMs);
       if (retryAfterMs > 0) return { cooldown: true, retryAfterMs } as CooldownResult;
     }
@@ -113,7 +118,7 @@ async function runSync(merchant: string, opts: { cooldownMs?: number } = {}) {
     {
       const { sequence: latestLedger } = await rpc<{ sequence: number }>('getLatestLedger', {});
 
-      const cursor = await getLastSyncedLedger(client);
+      const cursor = await getLastSyncedLedger(client, merchant.id);
       const resumeFrom = cursor !== null ? cursor + 1 : latestLedger - COLD_START_LOOKBACK;
       const retentionFloor = latestLedger - MAX_LOOKBACK;
       const startLedger = Math.max(resumeFrom, retentionFloor, 1);
@@ -125,6 +130,7 @@ async function runSync(merchant: string, opts: { cooldownMs?: number } = {}) {
 
       if (startLedger > latestLedger) {
         return {
+          merchant: merchant.address,
           latestLedger,
           startLedger,
           syncedTo: startLedger - 1,
@@ -139,12 +145,13 @@ async function runSync(merchant: string, opts: { cooldownMs?: number } = {}) {
 
       // Filter server-side to transfers addressed to this merchant. The asset
       // topic is optional across protocol versions, so match both arities.
-      const toTopic = addressTopicFilter(merchant);
+      const toTopic = addressTopicFilter(merchant.address);
       const transfer = transferTopicFilter();
+      const assetContractIds = merchant.assetContractIds ?? DEFAULT_ASSET_CONTRACT_IDS;
       const filters = [
         {
           type: 'contract',
-          contractIds: ASSET_CONTRACT_IDS,
+          contractIds: assetContractIds,
           topics: [
             [transfer, '*', toTopic, '*'],
             [transfer, '*', toTopic],
@@ -166,56 +173,54 @@ async function runSync(merchant: string, opts: { cooldownMs?: number } = {}) {
         { startLedger, endLedger: latestLedger, withinBudget: () => Date.now() < deadline },
       );
 
-      let inserted = 0;
-      let decoded = 0;
+      const webhookUrl = merchant.webhookUrl ?? process.env.WEBHOOK_URL;
 
-      for (const event of events) {
-        const transferEvent = decodeTransferEvent(event);
-        // A malformed or non-transfer event must not stall the batch.
-        if (!transferEvent) continue;
-        decoded++;
+      // Per-event filtering lives in eventsToPaymentRows: a malformed or
+      // non-transfer event is skipped, and a transfer not addressed to this
+      // merchant is never recorded. Only the insert below is batched — batching
+      // must not quietly admit events that would have been filtered out.
+      const { rows, decoded } = eventsToPaymentRows(events, merchant);
 
-        // Defensive: never record a transfer that is not to this merchant.
-        if (transferEvent.to !== merchant) continue;
+      // DO UPDATE, not DO NOTHING: a row may already exist because the
+      // merchant reported route attribution before this transfer was indexed,
+      // which is the normal ordering — the hook fires the moment x402 settles,
+      // this job runs on a schedule. Skipping the conflict would leave that
+      // row permanently null and invisible. Only ledger-owned columns are
+      // written; route, method, request_id and hook_reported_at belong to the
+      // merchant's report and are left alone.
+      //
+      // The inserts and the cursor advance commit atomically (see
+      // insertPaymentsInTransaction): if any chunk fails, nothing commits and
+      // the cursor stays behind the failed run.
+      const { inserted, payments } = await insertPaymentsInTransaction(
+        client,
+        merchant.id,
+        rows,
+        sweptThrough,
+      );
 
-        // DO UPDATE, not DO NOTHING: a row may already exist because the
-        // merchant reported route attribution before this transfer was
-        // indexed, which is the normal ordering — the hook fires the moment
-        // x402 settles, this job runs on a schedule. Skipping the conflict
-        // would leave that row permanently null and invisible.
-        //
-        // Only ledger-owned columns are written. route, method, request_id and
-        // hook_reported_at belong to the merchant's report and are left alone.
-        const res = await client.query(
-          `INSERT INTO payments (tx_hash, ledger, payer, amount, asset, ts)
-  VALUES ($1, $2, $3, $4::numeric, $5, $6::timestamptz)
-  ON CONFLICT (tx_hash) DO UPDATE
-  SET ledger = EXCLUDED.ledger,
-  payer = EXCLUDED.payer,
-  amount = EXCLUDED.amount,
-  asset = EXCLUDED.asset,
-  ts = EXCLUDED.ts
-  WHERE payments.ledger IS NULL RETURNING *`,
-          [
-            transferEvent.txHash,
-            transferEvent.ledger,
-            transferEvent.from,
-            transferEvent.amount, // string - never a float
-            transferEvent.asset,
-            transferEvent.ledgerClosedAt,
-          ],
-        );
-        if (res.rowCount && res.rowCount > 0 && process.env.WEBHOOK_URL) {
-          const payment = res.rows[0];
+      // Webhooks fire after COMMIT, so a slow or failing webhook can neither
+      // hold the transaction open nor roll back a committed batch. The
+      // returned rows are exactly the payments written this run.
+      if (webhookUrl) {
+        for (const payment of payments) {
+          const body = JSON.stringify(payment);
+          const webhookSecret = process.env.WEBHOOK_SECRET;
+          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+          if (webhookSecret) {
+            headers['X-Webhook-Signature'] = createHmac('sha256', webhookSecret)
+              .update(body)
+              .digest('hex');
+          }
           const timeoutMs = 2000;
           for (let i = 0; i < 3; i++) {
             try {
               const controller = new AbortController();
               const id = setTimeout(() => controller.abort(), timeoutMs);
-              const webhookRes = await fetch(process.env.WEBHOOK_URL, {
+              const webhookRes = await fetch(webhookUrl, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payment),
+                headers,
+                body,
                 signal: controller.signal,
               });
               clearTimeout(id);
@@ -225,16 +230,18 @@ async function runSync(merchant: string, opts: { cooldownMs?: number } = {}) {
             }
           }
         }
-        inserted += res.rowCount ?? 0;
       }
 
-      // The sweep only ever reports whole windows, so this is safe whether or
-      // not it reached the head. Crucially it advances across empty windows
-      // too - a quiet merchant that never moved the cursor is how the indexer
-      // fell behind the RPC retention window and stopped seeing payments.
-      await setLastSyncedLedger(client, sweptThrough);
+      // The sweep only ever reports whole windows, so the cursor advance is
+      // safe whether or not it reached the head. Crucially it advances across
+      // empty windows too - a quiet merchant that never moved the cursor is
+      // how the indexer fell behind the RPC retention window and stopped
+      // seeing payments. Each merchant's cursor advances independently, so one
+      // merchant with no activity cannot hold back or be held back by
+      // another's progress.
 
       return {
+        merchant: merchant.address,
         latestLedger,
         startLedger,
         syncedTo: sweptThrough,
@@ -250,26 +257,51 @@ async function runSync(merchant: string, opts: { cooldownMs?: number } = {}) {
   });
 }
 
-/** Maps a run to a response, so both entry points answer identically. */
-function respond(result: Awaited<ReturnType<typeof runSync>>) {
+type SyncResult = Awaited<ReturnType<typeof runSync>>;
+
+/** Maps one merchant's run to its response fragment. */
+function summarize(result: SyncResult) {
   if ('cooldown' in result) {
-    const retryAfterMs = Math.ceil(result.retryAfterMs);
+    return { cooldown: true, retryAfterMs: Math.ceil(result.retryAfterMs) };
+  }
+  return result;
+}
+
+/**
+ * Maps a set of per-merchant runs to a response.
+ *
+ * `.github/workflows/sync.yml` greps the body for `"syncedTo"` to prove real
+ * indexing happened (see the comment above that workflow) and for
+ * `"skippedLedgers":[1-9]` to catch a retention gap — both stay present here
+ * as deployment-wide maximums alongside the full per-merchant `results`, so
+ * that check keeps working unchanged whether this deployment has one merchant
+ * or many.
+ */
+function respond(results: SyncResult[]) {
+  // The manual, single-merchant POST path preserves the original 429 +
+  // Retry-After contract exactly, since the dashboard's "Sync now" button
+  // already depends on it.
+  if (results.length === 1 && 'cooldown' in results[0]) {
+    const retryAfterMs = Math.ceil(results[0].retryAfterMs);
     return NextResponse.json(
       { success: true, cooldown: true, retryAfterMs },
       { status: 429, headers: { 'Retry-After': String(Math.ceil(retryAfterMs / 1000)) } },
     );
   }
-  return NextResponse.json({ success: true, ...result });
-}
 
-function configError(): NextResponse | null {
-  if (!process.env.MERCHANT_ADDRESS) {
-    return NextResponse.json({ error: 'MERCHANT_ADDRESS is not configured' }, { status: 500 });
-  }
-  if (!process.env.DATABASE_URL) {
-    return NextResponse.json({ error: 'DATABASE_URL is not configured' }, { status: 500 });
-  }
-  return null;
+  const summaries = results.map(summarize);
+  const synced = summaries.filter(
+    (s): s is Extract<(typeof summaries)[number], { syncedTo: number }> => 'syncedTo' in s,
+  );
+  const syncedTo = synced.length ? Math.max(...synced.map((s) => s.syncedTo)) : null;
+  const skippedLedgers = synced.length ? Math.max(...synced.map((s) => s.skippedLedgers)) : 0;
+  const drained = synced.length ? synced.every((s) => s.drained) : true;
+
+  return NextResponse.json({
+    success: true,
+    results: summaries,
+    ...(syncedTo !== null ? { syncedTo, skippedLedgers, drained } : {}),
+  });
 }
 
 function failed(error: unknown) {
@@ -281,21 +313,43 @@ function failed(error: unknown) {
  * Scheduled entry point.
  *
  * Driven by Vercel Cron and by .github/workflows/sync.yml. Protected by
- * CRON_SECRET when set - both senders pass it as a bearer token - so the
- * endpoint cannot be driven by arbitrary callers. No cooldown: a scheduled run
- * is already rate limited by its schedule.
+ * CRON_SECRET, checked with a constant-time compare in isAuthorizedCronRequest
+ * (@/lib/cron-auth) - both senders pass it as a bearer token - so the
+ * endpoint cannot be driven by arbitrary callers. An unset CRON_SECRET fails
+ * closed: middleware.ts already denies this path before it reaches here, and
+ * this check denies it too, since no caller should ever run a sync against a
+ * deployment with no secret configured. No cooldown: a scheduled run is
+ * already rate limited by its schedule.
+ *
+ * Sweeps every configured merchant in turn, each with its own cursor - a
+ * merchant with no activity still has its cursor advanced (see runSync),
+ * which is precisely the fix for the outage that motivated this workflow's
+ * checks in the first place.
  */
 export async function GET(request: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (secret && request.headers.get('authorization') !== `Bearer ${secret}`) {
+  if (!isAuthorizedCronRequest(request.headers.get('authorization'))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const bad = configError();
-  if (bad) return bad;
+  if (!process.env.DATABASE_URL) {
+    return NextResponse.json({ error: 'DATABASE_URL is not configured' }, { status: 500 });
+  }
 
   try {
-    return respond(await runSync(process.env.MERCHANT_ADDRESS as string));
+    const merchants = await withClient(async (client) => {
+      await ensureSchema(client);
+      return listMerchants(client);
+    });
+
+    if (merchants.length === 0) {
+      return NextResponse.json({ error: 'No merchants are configured' }, { status: 500 });
+    }
+
+    const results: SyncResult[] = [];
+    for (const merchant of merchants) {
+      results.push(await runSync(merchant));
+    }
+    return respond(results);
   } catch (error: unknown) {
     return failed(error);
   }
@@ -304,16 +358,22 @@ export async function GET(request: Request) {
 /**
  * Manual entry point, behind the dashboard's"Sync now"button.
  *
- * Protected by session authentication via middleware. MANUAL_COOLDOWN_MS bounds the cost.
+ * Protected by session authentication via middleware, which resolves to
+ * exactly the merchant that owns this dashboard session — a signed-in
+ * merchant can only trigger their own sync. MANUAL_COOLDOWN_MS bounds the cost.
  */
-export async function POST() {
-  const bad = configError();
-  if (bad) return bad;
+export async function POST(request: Request) {
+  if (!process.env.DATABASE_URL) {
+    return NextResponse.json({ error: 'DATABASE_URL is not configured' }, { status: 500 });
+  }
 
   try {
-    return respond(
-      await runSync(process.env.MERCHANT_ADDRESS as string, { cooldownMs: MANUAL_COOLDOWN_MS }),
-    );
+    const merchant = await withClient((client) => getMerchantFromRequest(client, request));
+    if (!merchant) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    return respond([await runSync(merchant, { cooldownMs: MANUAL_COOLDOWN_MS })]);
   } catch (error: unknown) {
     return failed(error);
   }

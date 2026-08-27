@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { withClient, ensureSchema, getSyncState } from '@/lib/db';
+import { withClient, withMerchantClient, ensureSchema, getSyncState } from '@/lib/db';
+import { getMerchantFromRequest } from '@/lib/merchants';
 import { isHash32 } from '@/lib/receipt-anchor';
 import type { SyncState } from '@/lib/sync-status';
 
@@ -22,6 +23,10 @@ export interface PaymentsResponse {
   /** Null until the indexer has run at least once. */
   sync: SyncState | null;
   next_cursor?: string | null;
+  /** Total count of all settled payments for this merchant. */
+  total_count?: number;
+  /** Sum of all settled payment amounts for this merchant. */
+  total_amount?: string;
 }
 
 export async function GET(request: Request) {
@@ -63,22 +68,49 @@ export async function GET(request: Request) {
   }
 
   try {
-    const { rows, sync } = await withClient(async (client) => {
-      await ensureSchema(client);
+    const merchant = await withClient((client) => getMerchantFromRequest(client, request));
+    if (!merchant) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
-      let query = `SELECT tx_hash, ledger, payer, amount::text AS amount, asset, ts, route, method FROM payments WHERE ts IS NOT NULL`;
-      const params: (string | number)[] = [];
-      if (parsedCursor) {
-        query += ` AND (ts < $1 OR (ts = $1 AND tx_hash < $2))`;
-        params.push(parsedCursor.ts, parsedCursor.txHash);
-      }
+    const { rows, sync, totalCount, totalAmount } = await withMerchantClient(
+      merchant.id,
+      async (client) => {
+        await ensureSchema(client);
 
-      query += ` ORDER BY ts DESC, tx_hash DESC LIMIT $${params.length + 1}`;
-      params.push(limit);
+        const countRes = await client.query<{ total_count: string; total_amount: string | null }>(
+          `SELECT count(*)::text AS total_count, coalesce(sum(amount), 0)::text AS total_amount FROM payments WHERE merchant_id = $1 AND ts IS NOT NULL`,
+          [merchant.id],
+        );
+        const totalCount = countRes.rows.length
+          ? Number(countRes.rows[0].total_count ?? countRes.rows.length)
+          : 0;
+        const totalAmount =
+          countRes.rows.length &&
+          countRes.rows[0].total_amount !== undefined &&
+          countRes.rows[0].total_amount !== null
+            ? String(countRes.rows[0].total_amount)
+            : '0';
 
-      const result = await client.query(query, params);
-      return { rows: result.rows, sync: await getSyncState(client) };
-    });
+        let query = `SELECT tx_hash, ledger, payer, amount::text AS amount, asset, ts, route, method FROM payments WHERE merchant_id = $1 AND ts IS NOT NULL`;
+        const params: (string | number)[] = [merchant.id];
+        if (parsedCursor) {
+          query += ` AND (ts < $${params.length + 1} OR (ts = $${params.length + 1} AND tx_hash < $${params.length + 2}))`;
+          params.push(parsedCursor.ts, parsedCursor.txHash);
+        }
+
+        query += ` ORDER BY ts DESC, tx_hash DESC LIMIT $${params.length + 1}`;
+        params.push(limit);
+
+        const result = await client.query(query, params);
+        return {
+          rows: result.rows,
+          sync: await getSyncState(client, merchant.id),
+          totalCount,
+          totalAmount,
+        };
+      },
+    );
 
     const next_cursor =
       rows.length === limit
@@ -100,10 +132,24 @@ export async function GET(request: Request) {
       })),
       sync,
       next_cursor,
+      total_count: totalCount,
+      total_amount: totalAmount,
     };
-    return NextResponse.json(body);
+    return NextResponse.json(body, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+      },
+    });
   } catch (error: unknown) {
     console.error('Error fetching payments:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Internal Server Error' },
+      {
+        status: 500,
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        },
+      },
+    );
   }
 }
