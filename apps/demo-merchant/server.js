@@ -174,15 +174,40 @@ resourceServer.onAfterSettle(async (ctx) => {
 // 3. Configure the routes
 // ---------------------------------------------------------------------------
 const routesConfig = {
+  // Cheap and frequent — the "everyday" call. 0.0001 XLM.
   '/api/hello': {
     accepts: {
       scheme: 'exact',
-      price: { asset: XLM_SAC, amount: '1000' }, // 1000 stroops = 0.0001 XLM
+      price: { asset: XLM_SAC, amount: '1000' }, // 1000 stroops
+      network: NETWORK,
+      payTo: process.env.MERCHANT_ADDRESS || 'GAQW...REPLACE_WITH_REAL_ADDRESS',
+    },
+  },
+  // Mid price — 0.0025 XLM. A different magnitude from /api/hello so per-route
+  // totals differ by more than call count.
+  '/api/insights/daily': {
+    accepts: {
+      scheme: 'exact',
+      price: { asset: XLM_SAC, amount: '25000' }, // 25,000 stroops
+      network: NETWORK,
+      payTo: process.env.MERCHANT_ADDRESS || 'GAQW...REPLACE_WITH_REAL_ADDRESS',
+    },
+  },
+  // Expensive and rare — 0.1 XLM. A third, much larger magnitude so decimal
+  // handling and totals are exercised at a genuinely different scale.
+  '/api/analytics/full': {
+    accepts: {
+      scheme: 'exact',
+      price: { asset: XLM_SAC, amount: '1000000' }, // 1,000,000 stroops
       network: NETWORK,
       payTo: process.env.MERCHANT_ADDRESS || 'GAQW...REPLACE_WITH_REAL_ADDRESS',
     },
   },
 };
+
+// /api/free is deliberately NOT in routesConfig: the x402 middleware only
+// intercepts configured routes, so this route passes straight through — the
+// free/paid boundary is visible in one server.
 
 const httpServer = new x402HTTPResourceServer(resourceServer, routesConfig);
 
@@ -201,6 +226,8 @@ app.get('/api/hello', (_req, res) => {
   res.json({
     message: 'Payment verified!',
     data: 'This is the premium Accensa content.',
+    route: '/api/hello',
+    price: '0.0001 XLM',
   });
 });
 
