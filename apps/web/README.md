@@ -2,9 +2,19 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Security
 
-The dashboard and API routes are secured using a Stellar Wallet Auth model (similar to SEP-10). Merchants must prove control of the configured `MERCHANT_ADDRESS` by signing a challenge using Freighter to access the dashboard. 
+The dashboard and API routes are secured using a Stellar Wallet Auth model (similar to SEP-10). Merchants must prove control of the configured `MERCHANT_ADDRESS` by signing a challenge using Freighter to access the dashboard.
 
 See [SECURITY.md](./SECURITY.md) and [DESIGN.md](./DESIGN.md) for full details on the access model and session handling.
+
+## Configuration
+
+Environment variables prefixed `NEXT_PUBLIC_` are exposed to the browser.
+
+| Variable                      | Values                                             | Default                           | Purpose                                                                                                                                                                                                                                                                         |
+| ----------------------------- | -------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_STELLAR_NETWORK` | `testnet`, `mainnet` (aliases: `public`, `pubnet`) | `testnet`, with a console warning | Network that block-explorer links (stellar.expert) point at. Set it to `mainnet` for a production deployment — otherwise every transaction and contract link resolves to a testnet page for something that only exists on mainnet. An unrecognised value fails fast at startup. |
+
+Other required server-side variables (`DATABASE_URL`, `MERCHANT_ADDRESS`, `STELLAR_NETWORK_PASSPHRASE`, …) are described in [SECURITY.md](./SECURITY.md) and [DESIGN.md](./DESIGN.md).
 
 ## Getting Started
 

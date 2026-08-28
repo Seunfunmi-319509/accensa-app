@@ -22,7 +22,7 @@
 ## The Problem
 
 When you put an x402 paywall in front of an API, payment stops being an event your
-backend records and becomes something that happens *on a ledger you don't control*.
+backend records and becomes something that happens _on a ledger you don't control_.
 An agent pays, retries, and gets its data — and your database never hears about it.
 
 So the merchant is left without the things every other payment stack gives them:
@@ -31,7 +31,7 @@ So the merchant is left without the things every other payment stack gives them:
   "what did I earn today, and from which route" means reading chain data, not
   querying your own database.
 - **No attribution.** A transfer tells you an amount and a payer. It doesn't tell you
-  *which endpoint* was bought, which is exactly what you need to price anything.
+  _which endpoint_ was bought, which is exactly what you need to price anything.
 - **No way to answer a dispute.** When an agent operator claims they were double
   charged, both sides are looking at different records.
 
@@ -66,15 +66,18 @@ of a cent, which is the only way verifiability survives micropayment economics.
      PostgreSQL                        │
           │                            │
           ▼                            ▼
-   Next.js dashboard  ◀──verify_receipt(leaf, proof)
+   Next.js dashboard  ──anchor_batch──▶  ReceiptAnchor
+          │                            │
+          ▼                            ▼
+   GET /api/receipts/:txHash    verify_receipt(leaf, proof)
 ```
 
-| Component | Path | What it does |
-|---|---|---|
-| **Indexer** | [`apps/web/src/app/api/sync`](apps/web/src/app/api/sync) | Decodes Stellar Asset Contract `transfer` events addressed to the merchant and persists them to PostgreSQL. Runs on a schedule; tracks a ledger cursor so it never rescans or double-counts. |
-| **Dashboard** | [`apps/web/`](apps/web) | Next.js app showing payments, totals, and receipt verification. |
-| **SDK** | [`packages/sdk/`](packages/sdk) | `verifyReceipt()` for off-chain Merkle verification, and `attachAccensaHook()` / `createSettleHook()` for reporting route-level attribution from your x402 server. |
-| **Demo merchant** | [`apps/demo-merchant/`](apps/demo-merchant) | Minimal paid endpoint for exercising the flow end to end. |
+| Component         | Path                                                     | What it does                                                                                                                                                                                 |
+| ----------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Indexer**       | [`apps/web/src/app/api/sync`](apps/web/src/app/api/sync) | Decodes Stellar Asset Contract `transfer` events addressed to the merchant and persists them to PostgreSQL. Runs on a schedule; tracks a ledger cursor so it never rescans or double-counts. |
+| **Dashboard**     | [`apps/web/`](apps/web)                                  | Next.js app showing payments, totals, and receipt verification.                                                                                                                              |
+| **SDK**           | [`packages/sdk/`](packages/sdk)                          | `verifyReceipt()` for off-chain Merkle verification, and `attachAccensaHook()` / `createSettleHook()` for reporting route-level attribution from your x402 server.                           |
+| **Demo merchant** | [`apps/demo-merchant/`](apps/demo-merchant)              | Minimal paid endpoint for exercising the flow end to end.                                                                                                                                    |
 
 ## Verifying a Receipt Off-Chain
 
@@ -119,6 +122,9 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
 MERCHANT_ADDRESS=GCALKSGAZRJLSUEJT3M5W6LN4R7XQOLIRCOS6ZA6EDZVTZDBIIPPFKJ6
 STELLAR_RPC_URL=https://soroban-testnet.stellar.org
 HOOK_API_KEY=any-shared-secret   # required for /api/hook/settle
+# ASSET_CONTRACT_IDS — comma-separated SAC ids whose transfers are revenue.
+# Omitted, it defaults to the testnet native XLM SAC. For USDC (or XLM + USDC):
+# ASSET_CONTRACT_IDS=CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA,CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
 
 # 3. Dashboard (schema is created on first request)
 cd apps/web
@@ -129,6 +135,38 @@ pnpm dev
 Then trigger an index run with `curl localhost:3000/api/sync`, and the dashboard at
 `/dashboard` will show whatever settled to `MERCHANT_ADDRESS`. If nothing has, it
 says so — the dashboard never invents rows to fill space.
+
+### Payment webhooks (`WEBHOOK_URL`)
+
+Set `WEBHOOK_URL` to receive a `POST` for each newly indexed payment. The
+indexer **does not wait on your endpoint**. Each insert writes a
+`webhook_deliveries` row in the same database transaction; a separate job at
+`GET /api/webhooks/deliver` (same `CRON_SECRET` bearer as `/api/sync`) ships
+the payload. A host that sleeps, 500s, or rate-limits cannot stall the ledger
+cursor — that is how 207 ledgers were lost the last time indexing blocked on
+something that was not the chain.
+
+**Retry policy.** Up to 8 attempts over 24 hours. Exponential backoff with 25%
+jitter, capped at one hour. 5xx, 429, and transport errors are retried; other
+4xx are not. A `429` honours `Retry-After` (delta-seconds or HTTP-date). After
+the window the row is `failed` and is listed on the dashboard.
+
+**Signature.** Ed25519 over the exact UTF-8 body bytes, the same scheme as
+settlement reporting.
+
+| Header | Value |
+| --- | --- |
+| `Content-Type` | `application/json` |
+| `X-Signature` | hex-encoded Ed25519 signature of the raw body |
+| `X-Accensa-Timestamp` | Unix seconds at sign time |
+| `X-Accensa-Delivery-Id` | `webhook_deliveries.id` |
+
+`WEBHOOK_SIGNING_KEY` is a 32-byte Ed25519 private key as hex. Without it,
+queued deliveries fail closed rather than going out unsigned. Verify with the
+matching public key over the raw request body, then parse JSON.
+
+Body fields: `tx_hash`, `ledger`, `payer`, `amount`, `asset`, `ts`, `route`,
+`method`.
 
 Routes: `/` is the landing page, `/dashboard` the merchant view, and `/verify` the
 public receipt verifier, which needs no account.
@@ -145,7 +183,10 @@ Set `HOOK_API_KEY` on both sides, then report settlements from your x402 server:
 import { createSettleHook } from '@accensa/sdk';
 
 resourceServer.onAfterSettle(
-  createSettleHook({ indexerUrl: 'https://your-accensa.vercel.app', apiKey: process.env.HOOK_API_KEY }),
+  createSettleHook({
+    indexerUrl: 'https://your-accensa.vercel.app',
+    apiKey: process.env.HOOK_API_KEY,
+  }),
 );
 ```
 
@@ -160,10 +201,38 @@ transfers the indexer has not reached yet are staged and completed on the next r
 
 [`apps/demo-merchant/`](apps/demo-merchant) is a working example.
 
+### Tenancy model
+
+One deployment now supports **multiple merchants**. Each merchant is a row in the
+`merchants` table (`address`, and optionally a settlement-reporting `public_key_hex`,
+`asset_contract_ids`, `refund_vault_id`, and `webhook_url` that override the
+deployment-wide env vars). `payments` and the indexer's ledger cursor
+(`sync_state`) are scoped by `merchant_id`, enforced both by application-level query
+scoping and by Postgres row-level security as a second line of defence — see
+[DESIGN.md](DESIGN.md) for the full design.
+
+Upgrading an existing single-merchant deployment needs no action: the migration
+(`migrations/003_multi_merchant.sql`, applied automatically) backfills one `merchants`
+row from `MERCHANT_ADDRESS`/`MERCHANT_PUBLIC_KEY` and every existing payment onto it.
+Onboarding another merchant means inserting one more row into `merchants`, not
+standing up another deployment.
+
 ### Contract addresses
 
 Testnet IDs are published in
 [`accensa-contracts/deployments/testnet.env`](https://github.com/accensa/accensa-contracts/blob/main/deployments/testnet.env).
+
+### Settling in USDC or multiple assets
+
+`ASSET_CONTRACT_IDS` selects which Stellar Asset Contracts the indexer treats as
+revenue. It defaults to the testnet native XLM SAC; set it to a comma-separated
+list to index USDC, or XLM and USDC together. `payments.asset` records each
+row's asset, and revenue is grouped by asset — never summed across them.
+
+RefundVault holds a **single** token, so a merchant taking both assets refunds
+in only one of them unless a second vault is deployed. Receiving USDC also
+requires a trustline. Both constraints are spelled out in
+[DEPLOYMENT.md](DEPLOYMENT.md#settling-in-usdc-or-multiple-assets).
 
 ## Testing
 
@@ -191,7 +260,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Security policy in [SECURITY.md](SECURIT
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
 ## Setup
+
 See [db-setup.md](db-setup.md) for database setup instructions, and
 [DEPLOYMENT.md](DEPLOYMENT.md) for the deployed topology — how Vercel, Supabase,
 and the GitHub Actions indexer fit together, which environment variables live
