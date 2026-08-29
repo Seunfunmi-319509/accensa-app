@@ -36,7 +36,8 @@ jobs:
         run: npm install -g pnpm@11
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      # Lints apps/web and packages/sdk from the root.
+      # Lints apps/web from the root.
+      # packages/sdk has no ESLint config; typecheck covers it in the typecheck job.
       # apps/docs (Docusaurus) and apps/demo-merchant (example JS) are excluded.
       - name: Lint workspace packages
         run: pnpm lint
