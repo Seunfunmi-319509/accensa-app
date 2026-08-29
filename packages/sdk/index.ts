@@ -62,6 +62,21 @@ export {
 /** The strict Order and Product types themselves. */
 export type { Order, OrderMetadata } from './src/types/order';
 export type { Product, ProductMetadata } from './src/types/product';
+/** Zero-knowledge commitments and opening proofs for off-chain privacy (#173). */
+export {
+  ZK_PROOF_SCHEME,
+  canonicalJson,
+  sha256Hex,
+  randomBlinding,
+  commitmentOf,
+  createCommitment,
+  createOpeningProof,
+  verifyOpeningProof,
+  sha256CommitmentVerifier,
+  type CommitmentResult,
+  type OpeningProof,
+  type ZkVerifier,
+} from './src/zk-proof';
 
 /**
  * This package deliberately ships no paywall middleware.
