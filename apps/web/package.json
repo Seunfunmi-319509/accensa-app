@@ -9,9 +9,13 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:visual": "playwright test",
+    "test:visual:update": "playwright test --update-snapshots",
     "e2e": "playwright test --config playwright.e2e.config.ts",
     "e2e:headed": "playwright test --config playwright.e2e.config.ts --headed",
-    "e2e:trace": "playwright test --config playwright.e2e.config.ts --trace on"
+    "e2e:trace": "playwright test --config playwright.e2e.config.ts --trace on",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
   },
   "dependencies": {
     "@accensa/sdk": "workspace:^",

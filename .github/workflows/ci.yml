@@ -113,7 +113,7 @@ jobs:
         with:
           node-version: '22'
       - name: Install pnpm
-        run: npm install -g pnpm@9
+        run: npm install -g pnpm@11
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       # Unit tests only: synthetic and fixture data, no live RPC or database.
@@ -176,9 +176,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          node-version: 22
       - name: Install pnpm
-        run: npm install -g pnpm@9
+        run: npm install -g pnpm@11
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Build SDK
