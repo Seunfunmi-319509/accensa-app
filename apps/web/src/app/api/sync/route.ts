@@ -27,6 +27,9 @@ import {
 } from '@/lib/insert-payments';
 import { listMerchants, getMerchantFromRequest, type Merchant } from '@/lib/merchants';
 import { cooldownRemaining } from '@/lib/sync-status';
+import { broadcastSyncEvent, hasSubscribers } from '@/lib/sync-events';
+import { isAuthorizedCronRequest } from '@/lib/cron-auth';
+import { logSyncFailure, notifySyncFailure, type SyncFailureContext } from '@/lib/sync-logger';
 import { createHmac } from 'node:crypto';
 
 export const dynamic = 'force-dynamic';
@@ -317,70 +320,6 @@ async function runSync(merchant: Merchant, opts: { cooldownMs?: number } = {}) {
                   // A webhook the merchant cannot receive must not stall indexing.
                 }
               }
-      for (const event of events) {
-        const transferEvent = decodeTransferEvent(event);
-        // A malformed or non-transfer event must not stall the batch.
-        if (!transferEvent) continue;
-        decoded++;
-
-        // Defensive: never record a transfer that is not to this merchant.
-        if (transferEvent.to !== merchant) continue;
-
-        // DO UPDATE, not DO NOTHING: a row may already exist because the
-        // merchant reported route attribution before this transfer was
-        // indexed, which is the normal ordering — the hook fires the moment
-        // x402 settles, this job runs on a schedule. Skipping the conflict
-        // would leave that row permanently null and invisible.
-        //
-        // Only ledger-owned columns are written. route, method, request_id and
-        // hook_reported_at belong to the merchant's report and are left alone.
-        await client.query('BEGIN');
-        try {
-          const res = await client.query(
-            `INSERT INTO payments (tx_hash, ledger, payer, amount, asset, ts)
-  VALUES ($1, $2, $3, $4::numeric, $5, $6::timestamptz)
-  ON CONFLICT (tx_hash) DO UPDATE
-  SET ledger = EXCLUDED.ledger,
-  payer = EXCLUDED.payer,
-  amount = EXCLUDED.amount,
-  asset = EXCLUDED.asset,
-  ts = EXCLUDED.ts
-  WHERE payments.ledger IS NULL RETURNING *`,
-          [
-            merchant.id,
-            transferEvent.txHash,
-            transferEvent.ledger,
-            transferEvent.from,
-            transferEvent.amount, // string - never a float
-            transferEvent.asset,
-            transferEvent.ledgerClosedAt,
-          ],
-        );
-        if (res.rowCount && res.rowCount > 0 && webhookUrl) {
-          const payment = res.rows[0];
-          const body = JSON.stringify(payment);
-          const webhookSecret = process.env.WEBHOOK_SECRET;
-          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-          if (webhookSecret) {
-            headers['X-Webhook-Signature'] = createHmac('sha256', webhookSecret)
-              .update(body)
-              .digest('hex');
-          }
-          const timeoutMs = 2000;
-          for (let i = 0; i < 3; i++) {
-            try {
-              const controller = new AbortController();
-              const id = setTimeout(() => controller.abort(), timeoutMs);
-              const webhookRes = await fetch(webhookUrl, {
-                method: 'POST',
-                headers,
-                body,
-                signal: controller.signal,
-              });
-              clearTimeout(id);
-              if (webhookRes.ok || webhookRes.status < 500) break;
-            } catch {
-              // A webhook the merchant cannot receive must not stall indexing.
             }
           }
         },

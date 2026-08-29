@@ -18,14 +18,6 @@ import { fetchWithRetry, HttpError, retryAfterMs, type RetryOptions } from '../r
 import type { Order } from './types/order';
 import type { Product } from './types/product';
 import type { SyncEvent } from './types/sync-event';
-import {
-  AccensaAuthError,
-  AccensaContractError,
-  AccensaError,
-  AccensaNetworkError,
-} from './errors';
-
-export { AccensaAuthError, AccensaContractError, AccensaError, AccensaNetworkError };
 
 // Re-exported from `./errors` (which owns the canonical definitions) so that
 // consumers importing the error classes from `@accensa/sdk` keep working.
@@ -101,14 +93,6 @@ export interface ProductsPage {
   products: Product[];
   /** Whether more product groups exist than the limit (rolled into "(other)"). */
   truncated: boolean;
-}
-
-/** Thrown when a request exceeds the configured timeout. */
-export class AccensaTimeoutError extends AccensaError {
-  constructor(message: string) {
-    super(message);
-    this.name = 'AccensaTimeoutError';
-  }
 }
 
 export class AccensaClient {
@@ -255,34 +239,23 @@ export class AccensaClient {
 
     let response: Response;
     try {
-      response = await fetchWithRetry(`${this.indexerUrl}${path}`, {
-        method: 'GET',
-        headers: this.headers,
-        signal,
-      }, {
-        fetchImpl: doFetch,
-        retryOn429: true,
-        maxRetries: RATE_LIMIT_MAX_RETRIES,
-      });
+      response = await fetchWithRetry(
+        `${this.indexerUrl}${path}`,
+        {
+          method: 'GET',
+          headers: this.headers,
+          signal,
+        },
+        {
+          fetchImpl: doFetch,
+          retryOn429: true,
+          maxRetries: RATE_LIMIT_MAX_RETRIES,
+        },
+      );
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'TimeoutError') {
         throw new AccensaTimeoutError(`Request to ${path} timed out after ${this.timeoutMs}ms`);
       }
-      throw new AccensaNetworkError(`Failed to reach the indexer at ${path}`, {
-        url: `${this.indexerUrl}${path}`,
-        cause: err,
-      });
-    }
-
-    if (!response.ok) {
-      if (response.status === 401 || response.status === 403) {
-        throw new AccensaAuthError(
-          `Accensa rejected the request with ${response.status} for ${path}`,
-          {
-            status: response.status,
-            path,
-          },
-        );
       if (err instanceof HttpError && err.status === 429) {
         // fetchWithRetry already waited between attempts; if the node is still
         // limiting us the caller needs a concrete signal, not a generic error.

@@ -7,8 +7,6 @@
     "lint": "pnpm --filter web lint && pnpm --filter @accensa/sdk lint",
     "typecheck": "pnpm --filter web typecheck && pnpm --filter @accensa/sdk typecheck",
     "changeset": "changeset"
-    "lint": "pnpm --filter web lint",
-    "typecheck": "pnpm --filter web typecheck && pnpm --filter @accensa/sdk typecheck"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^1.0.0",
