@@ -203,6 +203,7 @@ fixture. Only the wire type the SDK directly depends on
 (`SettleHookPayload`) has been switched over so far; the spec also documents
 `/api/payments`, `/api/routes`, `/api/verify` and `/api/sync` for the same
 treatment later.
+
 ## Reading Orders and Products
 
 The SDK ships a small typed client for the Accensa indexer's read API. Every

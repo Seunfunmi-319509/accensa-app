@@ -26,6 +26,7 @@
       "import": "./dist/merkle.mjs",
       "require": "./dist/merkle.js"
     },
+    "./receipt-anchor": "./receipt-anchor.ts",
     "./receipt-anchor-client": "./receipt-anchor-client.ts",
     "./types": "./src/types/index.ts",
     "./webhooks": "./webhooks.ts",

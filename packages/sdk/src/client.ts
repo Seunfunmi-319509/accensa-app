@@ -17,6 +17,14 @@ import { ordersFromResponse, productsFromResponse } from './mapping';
 import type { Order } from './types/order';
 import type { Product } from './types/product';
 import type { SyncEvent } from './types/sync-event';
+import {
+  AccensaAuthError,
+  AccensaContractError,
+  AccensaError,
+  AccensaNetworkError,
+} from './errors';
+
+export { AccensaAuthError, AccensaContractError, AccensaError, AccensaNetworkError };
 
 /** Default request timeout in milliseconds (30 seconds). */
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -39,8 +47,6 @@ export interface AccensaClientOptions {
   timeoutMs?: number;
   /** Injected in tests. Defaults to global fetch. */
   fetchImpl?: typeof fetch;
-  /** Optional request timeout in milliseconds. */
-  timeoutMs?: number;
 }
 
 /** A page of {@link Order}s as `/api/payments` returns them. */
@@ -55,17 +61,6 @@ export interface ProductsPage {
   products: Product[];
   /** Whether more product groups exist than the limit (rolled into "(other)"). */
   truncated: boolean;
-}
-
-/** Thrown when the indexer responds with a non-2xx status. */
-export class AccensaError extends Error {
-  readonly status?: number;
-
-  constructor(message: string, status?: number) {
-    super(message);
-    this.name = 'AccensaError';
-    this.status = status;
-  }
 }
 
 /** Thrown when a request exceeds the configured timeout. */
@@ -200,11 +195,12 @@ export class AccensaClient {
       });
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'TimeoutError') {
-        throw new AccensaTimeoutError(
-          `Request to ${path} timed out after ${this.timeoutMs}ms`,
-        );
+        throw new AccensaTimeoutError(`Request to ${path} timed out after ${this.timeoutMs}ms`);
       }
-      throw err;
+      throw new AccensaNetworkError(`Failed to reach the indexer at ${path}`, {
+        url: `${this.indexerUrl}${path}`,
+        cause: err,
+      });
     }
 
     if (!response.ok) {
