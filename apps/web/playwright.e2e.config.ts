@@ -25,9 +25,17 @@ export default defineConfig({
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
-  projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-  ],
+  // Platform-independent snapshot paths (no {platform}/{projectName}) so the
+  // same committed PNGs are compared on every OS CI runs on. A small pixel
+  // ratio tolerance absorbs cross-OS font rasterization differences while the
+  // screenshots still catch layout regressions.
+  snapshotPathTemplate: '{testDir}/__screenshots__/{arg}{ext}',
+  expect: {
+    toHaveScreenshot: {
+      maxDiffPixelRatio: 0.01,
+    },
+  },
+  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
     // `next dev` rather than a production build: the app's API routes are
     // type-checked lazily per request, and the e2e specs intercept every API

@@ -1,6 +1,11 @@
 import { test, expect, type Page } from '@playwright/test';
 import { mintSessionCookie } from '../helpers/auth';
-import { MOCK_PAYMENTS, mockDashboardApi, mockDashboardApiEmpty, mockDashboardApiError } from '../helpers/mocks';
+import {
+  MOCK_PAYMENTS,
+  mockDashboardApi,
+  mockDashboardApiEmpty,
+  mockDashboardApiError,
+} from '../helpers/mocks';
 
 async function openDashboard(page: Page) {
   await page.context().addCookies([
@@ -20,7 +25,7 @@ test.describe('dashboard', () => {
 
     await expect(page.getByRole('heading', { name: 'Settled Volume' })).toBeVisible();
     // Total settled reflects the mocked fixtures (10.00 + 5.50).
-    await expect(page.getByText("15.50")).toBeVisible();
+    await expect(page.getByText('15.50')).toBeVisible();
     // Both payment assets render.
     await expect(page.getByText('USDC').first()).toBeVisible();
     await expect(page.getByText('XLM').first()).toBeVisible();

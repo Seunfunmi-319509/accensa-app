@@ -22,6 +22,16 @@ export default defineConfig({
     trace: 'on-first-retry',
     colorScheme: 'light',
   },
+  // Platform-independent snapshot paths (no {platform}/{projectName}) so the
+  // same committed PNGs are compared on every OS CI runs on. A small pixel
+  // ratio tolerance absorbs cross-OS font rasterization differences while the
+  // screenshots still catch layout regressions.
+  snapshotPathTemplate: '{testDir}/__screenshots__/{arg}{ext}',
+  expect: {
+    toHaveScreenshot: {
+      maxDiffPixelRatio: 0.01,
+    },
+  },
   projects: [
     {
       name: 'chromium',

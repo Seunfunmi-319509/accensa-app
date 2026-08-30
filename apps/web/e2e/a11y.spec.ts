@@ -71,9 +71,7 @@ async function runAxe(page: Page, label: string) {
 
   for (const v of allowed) {
     const entry = ALLOWLIST[v.id];
-    console.log(
-      `[allowlist] ${label}: ${v.id} on "${entry.element}" (tracked: ${entry.issue})`,
-    );
+    console.log(`[allowlist] ${label}: ${v.id} on "${entry.element}" (tracked: ${entry.issue})`);
   }
 
   const failures = violations.map((v) => ({
@@ -87,10 +85,7 @@ async function runAxe(page: Page, label: string) {
     failures,
     `Accessibility violations on ${label}:\n` +
       failures
-        .map(
-          (f) =>
-            `- ${f.rule} (${f.impact}): ${f.help} on ${f.elements.join(', ')}`,
-        )
+        .map((f) => `- ${f.rule} (${f.impact}): ${f.help} on ${f.elements.join(', ')}`)
         .join('\n'),
   ).toEqual([]);
 }
