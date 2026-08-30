@@ -252,13 +252,13 @@ Every error the SDK throws extends the base `AccensaError`, so a single
 `instanceof AccensaError` catch handles the whole SDK surface. The subclasses
 discriminate the failure modes you actually branch on:
 
-| Class                  | Thrown when                                                                                                 | Metadata         |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------- | ---------------- |
-| `AccensaAuthError`     | The indexer rejected the credential (HTTP 401/403).                                                         | `status`, `path` |
-| `AccensaRateLimitError`| A rate-limited RPC or indexer node answered 429 and the retry budget was spent.                             | `path`, `retryAfterMs` |
-| `AccensaNetworkError`  | The indexer could not be reached — `fetch` failed, timed out, or is unavailable.                            | `url`, `cause`   |
-| `AccensaContractError` | The indexer (or a receipt) violated the wire contract: a malformed row, a non-JSON body, a bad Merkle hash. | `index`          |
-| `AccensaError`         | The base class; also thrown directly for other non-2xx statuses (e.g. 500).                                 | `status`         |
+| Class                   | Thrown when                                                                                                 | Metadata               |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `AccensaAuthError`      | The indexer rejected the credential (HTTP 401/403).                                                         | `status`, `path`       |
+| `AccensaRateLimitError` | A rate-limited RPC or indexer node answered 429 and the retry budget was spent.                             | `path`, `retryAfterMs` |
+| `AccensaNetworkError`   | The indexer could not be reached — `fetch` failed, timed out, or is unavailable.                            | `url`, `cause`         |
+| `AccensaContractError`  | The indexer (or a receipt) violated the wire contract: a malformed row, a non-JSON body, a bad Merkle hash. | `index`                |
+| `AccensaError`          | The base class; also thrown directly for other non-2xx statuses (e.g. 500).                                 | `status`               |
 
 Rate limits are retried automatically: the client waits out `Retry-After`
 (up to 3 times) before throwing `AccensaRateLimitError`, so a transient 429
