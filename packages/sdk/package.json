@@ -47,7 +47,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "gen:vectors": "node scripts/generate-vectors.mjs"
+    "gen:vectors": "node scripts/generate-vectors.mjs",
+    "gen:api": "openapi-typescript ../../apps/web/openapi.yaml -o ./generated/api-types.ts && prettier --write ./generated/api-types.ts"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^16.0.1"
@@ -63,6 +64,7 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/supertest": "^7.2.1",
+    "openapi-typescript": "^7.13.0",
     "supertest": "^7.2.2",
     "tsup": "^8.0.0",
     "typescript": "~5.9.3",
