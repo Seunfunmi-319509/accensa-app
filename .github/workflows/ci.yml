@@ -167,8 +167,6 @@ jobs:
 
   verify-pack:
     name: verify SDK tarball
-  e2e:
-    name: e2e (web)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -226,6 +224,20 @@ jobs:
           node "$SCRATCH/test.mjs"
 
           echo "All import checks passed"
+
+  e2e:
+    name: e2e (web)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pnpm
+        run: npm install -g pnpm@11
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
       - name: Install Playwright browser
         working-directory: ./apps/web
         run: pnpm exec playwright install --with-deps chromium
