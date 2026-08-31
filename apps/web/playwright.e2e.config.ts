@@ -15,6 +15,10 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
+  // The visual-regression suite is owned by playwright.config.ts (port 3100).
+  // Exclude it here so the e2e/flow/a11y specs run against the port they were
+  // written for without tripping over committed screenshot comparisons.
+  testIgnore: '**/visual.spec.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
