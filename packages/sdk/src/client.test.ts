@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
-import { AccensaClient, AccensaError } from './client';
+import {
+  AccensaClient,
+  AccensaAuthError,
+  AccensaContractError,
+  AccensaError,
+  AccensaNetworkError,
+  AccensaRateLimitError,
+} from './client';
 
 const TX_HASH = 'a'.repeat(64);
 const PAYER = 'G' + 'A'.repeat(55);
@@ -160,17 +167,241 @@ describe('AccensaClient — request plumbing', () => {
     expect(fetchImpl.mock.calls[0][1]?.headers).toEqual({ Authorization: 'Bearer secret' });
   });
 
-  it('throws AccensaError with the status on a non-2xx response', async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () => new globalThis.Response(null, { status: 401 }),
-    );
+  it('throws AccensaAuthError with status and path on 401/403', async () => {
+    for (const status of [401, 403]) {
+      const fetchImpl = vi.fn<typeof fetch>(async () => new globalThis.Response(null, { status }));
 
-    await expect(client(fetchImpl).listOrders()).rejects.toBeInstanceOf(AccensaError);
-    await expect(client(fetchImpl).listOrders()).rejects.toMatchObject({ status: 401 });
+      await expect(client(fetchImpl).listOrders()).rejects.toBeInstanceOf(AccensaAuthError);
+      // Auth errors are still catchable as the base class.
+      await expect(client(fetchImpl).listOrders()).rejects.toBeInstanceOf(AccensaError);
+      await expect(client(fetchImpl).listOrders()).rejects.toMatchObject({
+        status,
+        path: '/api/payments',
+      });
+    }
   });
 
-  it('throws a clear error when a malformed row comes back', async () => {
+  it('throws a plain AccensaError with the status for other non-2xx responses', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () => new globalThis.Response(null, { status: 500 }),
+    );
+
+    const error = await client(fetchImpl)
+      .listOrders()
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AccensaError);
+    expect(error).not.toBeInstanceOf(AccensaAuthError);
+    expect((error as AccensaError).status).toBe(500);
+  });
+
+  it('wraps a rejected fetch in AccensaNetworkError with the URL and cause', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      throw new Error('ECONNREFUSED');
+    });
+
+    const error = await client(fetchImpl)
+      .listOrders()
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AccensaNetworkError);
+    const networkError = error as AccensaNetworkError;
+    expect(networkError.url).toBe('https://accensa.test/api/payments');
+    expect(String(networkError.cause)).toContain('ECONNREFUSED');
+  });
+
+  it('throws AccensaNetworkError when there is no fetch implementation', async () => {
+    vi.stubGlobal('fetch', undefined);
+    const c = new AccensaClient({ indexerUrl: 'https://accensa.test' });
+    const error = await c.listOrders().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AccensaNetworkError);
+    expect(String(error)).toContain('No fetch implementation');
+    vi.unstubAllGlobals();
+  });
+
+  it('throws AccensaContractError when a malformed row comes back', async () => {
     const fetchImpl = jsonFetch({ payments: [{ amount: '1000' }] });
-    await expect(client(fetchImpl).listOrders()).rejects.toThrow(/row at index 0/);
+    const error = await client(fetchImpl)
+      .listOrders()
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AccensaContractError);
+    expect((error as AccensaContractError).index).toBe(0);
+    expect(String(error)).toContain('row at index 0');
+  });
+
+  it('throws AccensaContractError when the indexer returns a non-JSON body', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () => new globalThis.Response('<html>not json</html>', { status: 200 }),
+    );
+
+    const error = await client(fetchImpl)
+      .listOrders()
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AccensaContractError);
+    expect(String(error)).toContain('non-JSON');
+  });
+});
+
+describe('AccensaClient — rate limit handling (#155)', () => {
+  it('retries a 429 with the server-provided Retry-After and succeeds', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn<typeof fetch>();
+      fetchImpl.mockResolvedValueOnce(
+        new globalThis.Response(null, { status: 429, headers: { 'Retry-After': '1' } }),
+      );
+      fetchImpl.mockResolvedValueOnce(jsonFetch(paymentsBody)());
+
+      const c = client(fetchImpl);
+      const pending = c.listOrders();
+      await vi.advanceTimersByTimeAsync(1_000);
+      const page = await pending;
+
+      expect(page.orders).toHaveLength(2);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('throws AccensaRateLimitError with retryAfterMs when a 429 persists', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn<typeof fetch>(
+        async () =>
+          new globalThis.Response(null, {
+            status: 429,
+            headers: { 'Retry-After': '2' },
+          }),
+      );
+
+      const c = client(fetchImpl);
+      const pending = c.listOrders();
+      // Attach a catch handler up front so the rejection is not "unhandled"
+      // while the fake-timer loop advances; the awaited `.catch` below still
+      // observes the same error.
+      const result = pending.catch((e: unknown) => e);
+      // 3 retries at 2s, 2s, 2s (Retry-After each time).
+      for (let i = 0; i < 3; i++) await vi.advanceTimersByTimeAsync(2_000);
+      const error = await result;
+
+      expect(error).toBeInstanceOf(AccensaRateLimitError);
+      const rateError = error as AccensaRateLimitError;
+      expect(rateError.status).toBe(429);
+      expect(rateError.path).toBe('/api/payments');
+      expect(rateError.retryAfterMs).toBe(2000);
+      // A rate limit is still catchable as the base class.
+      expect(error).toBeInstanceOf(AccensaError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('honours a Retry-After expressed as an HTTP-date', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn<typeof fetch>();
+      const later = new Date(Date.now() + 5_000).toUTCString();
+      fetchImpl.mockResolvedValueOnce(
+        new globalThis.Response(null, { status: 429, headers: { 'Retry-After': later } }),
+      );
+      fetchImpl.mockResolvedValueOnce(jsonFetch(paymentsBody)());
+
+      const c = client(fetchImpl);
+      const pending = c.listOrders();
+      await vi.advanceTimersByTimeAsync(5_000);
+      const page = await pending;
+
+      expect(page.orders).toHaveLength(2);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('AccensaClient — read caching (#160)', () => {
+  it('serves repeat reads from cache without a second network call', async () => {
+    const fetchImpl = jsonFetch(paymentsBody);
+    const c = new AccensaClient({ indexerUrl: 'https://accensa.test', fetchImpl });
+
+    const first = await c.listOrders();
+    const second = await c.listOrders();
+
+    expect(first.orders).toHaveLength(2);
+    expect(second.orders).toHaveLength(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('fetches distinct query strings separately', async () => {
+    const fetchImpl = jsonFetch(paymentsBody);
+    const c = new AccensaClient({ indexerUrl: 'https://accensa.test', fetchImpl });
+
+    await c.listOrders({ limit: 25 });
+    await c.listOrders({ limit: 50 });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('invalidates the cache via clearCache', async () => {
+    const fetchImpl = jsonFetch(paymentsBody);
+    const c = new AccensaClient({ indexerUrl: 'https://accensa.test', fetchImpl });
+
+    await c.listOrders();
+    c.clearCache();
+    await c.listOrders();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('refetches after the cache TTL expires', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = jsonFetch(paymentsBody);
+      const c = new AccensaClient({
+        indexerUrl: 'https://accensa.test',
+        fetchImpl,
+        cacheTtlMs: 100,
+      });
+
+      await c.listOrders();
+      await c.listOrders();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(150);
+      await c.listOrders();
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not cache when cacheTtlMs is 0', async () => {
+    const fetchImpl = jsonFetch(paymentsBody);
+    const c = new AccensaClient({
+      indexerUrl: 'https://accensa.test',
+      fetchImpl,
+      cacheTtlMs: 0,
+    });
+
+    await c.listOrders();
+    await c.listOrders();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not cache failed reads', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () => new globalThis.Response(null, { status: 500 }),
+    );
+    const c = new AccensaClient({
+      indexerUrl: 'https://accensa.test',
+      fetchImpl,
+      cacheTtlMs: 1000,
+    });
+
+    await c.listOrders().catch(() => {});
+    await c.listOrders().catch(() => {});
+
+    // Every attempt must hit the network — an error is never served from cache.
+    expect(fetchImpl.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });

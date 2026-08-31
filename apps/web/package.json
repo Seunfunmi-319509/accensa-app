@@ -8,10 +8,14 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e": "playwright test --config playwright.e2e.config.ts",
+    "e2e:headed": "playwright test --config playwright.e2e.config.ts --headed",
+    "e2e:trace": "playwright test --config playwright.e2e.config.ts --trace on"
   },
   "dependencies": {
     "@accensa/sdk": "workspace:^",
+    "@albedo-link/intent": "^0.13.0",
     "@stellar/freighter-api": "^6.0.1",
     "@stellar/stellar-sdk": "^16.0.1",
     "@upstash/ratelimit": "^2.0.8",
@@ -26,6 +30,8 @@
     "swr": "^2.5.1"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4.3.2",
     "@types/node": "^20.19.43",
     "@types/pg": "^8.20.0",
@@ -35,6 +41,10 @@
     "eslint-config-next": "16.2.10",
     "tailwindcss": "^4.3.2",
     "typescript": "^5.9.3",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "@playwright/test": "^1.55.0",
+    "storybook": "^8.6.14",
+    "@storybook/nextjs": "^8.6.14",
+    "@storybook/addon-essentials": "^8.6.14"
   }
 }
