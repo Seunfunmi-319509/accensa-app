@@ -2,11 +2,26 @@ import { themes as prismThemes } from 'prism-react-renderer';
 import type { Config } from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
+const siteDescription =
+  'Accensa gives x402 sellers on Stellar the tools to track payments, verify receipts, and manage refunds across the merchant lifecycle.';
+
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
 const config: Config = {
   title: 'Accensa',
   tagline: 'Merchant back-office for x402 sellers on Stellar',
+  customFields: {
+    siteDescription,
+  },
+  headTags: [
+    {
+      tagName: 'meta',
+      attributes: {
+        name: 'description',
+        content: siteDescription,
+      },
+    },
+  ],
   favicon: 'img/icon.png',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
@@ -43,18 +58,12 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           editUrl: 'https://github.com/accensa/accensa-app/tree/main/apps/docs/',
         },
-        blog: {
-          showReadingTime: true,
-          feedOptions: {
-            type: ['rss', 'atom'],
-            xslt: true,
-          },
-          editUrl: 'https://github.com/accensa/accensa-app/tree/main/apps/docs/',
-          // Useful options to enforce blogging best practices
-          onInlineTags: 'warn',
-          onInlineAuthors: 'warn',
-          onUntruncatedBlogPosts: 'warn',
-        },
+        // No blog is planned for the documentation site: there is no
+        // `apps/docs/blog/` directory, no navbar/footer link to `/blog`, and
+        // the previously configured preset produced empty, discoverable RSS
+        // and Atom feeds that could never deliver anything. Disabled
+        // deliberately so the build output contains no `/blog` route or feeds.
+        blog: false,
         theme: {
           customCss: './src/css/custom.css',
         },
